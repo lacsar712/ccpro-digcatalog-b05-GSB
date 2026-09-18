@@ -45,6 +45,7 @@ func main() {
 		&models.Unit{},
 		&models.Material{},
 		&models.Find{},
+		&models.FindCompletenessLog{},
 	); err != nil {
 		log.Fatalf("auto migrate failed: %v", err)
 	}
@@ -86,6 +87,7 @@ func main() {
 			auth.POST("/finds", h.CreateFind)
 			auth.PUT("/finds/:id", h.UpdateFind)
 			auth.DELETE("/finds/:id", h.DeleteFind)
+			auth.GET("/finds/:id/completeness-logs", h.ListFindCompletenessLogs)
 		}
 	}
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"digcatalog/internal/middleware"
@@ -289,15 +290,16 @@ func (h *Handler) DeleteMaterial(c *gin.Context) {
 // ---------- Finds ----------
 
 type findReq struct {
-	UnitID       uint    `json:"unitId"`
-	MaterialID   *uint   `json:"materialId"`
-	RegisterNo   string  `json:"registerNo"`
-	ArtifactType string  `json:"artifactType"`
-	MaterialName string  `json:"materialName"`
-	Completeness string  `json:"completeness"`
-	FindDate     *string `json:"findDate"`
-	Description  string  `json:"description"`
-	StorageLoc   string  `json:"storageLoc"`
+	UnitID            uint    `json:"unitId"`
+	MaterialID        *uint   `json:"materialId"`
+	RegisterNo        string  `json:"registerNo"`
+	ArtifactType      string  `json:"artifactType"`
+	MaterialName      string  `json:"materialName"`
+	Completeness      string  `json:"completeness"`
+	CompletenessNote  *string `json:"completenessNote"` // 完整度变更备注（可选，仅在完整度实际变化时落日志）
+	FindDate          *string `json:"findDate"`
+	Description       string  `json:"description"`
+	StorageLoc        string  `json:"storageLoc"`
 }
 
 func parseDate(s *string) *time.Time {
@@ -392,13 +394,72 @@ func (h *Handler) UpdateFind(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数无效"})
 		return
 	}
+	oldCompleteness := find.Completeness
 	h.applyFindReq(&find, &req)
-	if err := h.DB.Save(&find).Error; err != nil {
+
+	// 完整度发生变化时，与本次保存在同一事务内写入变更轨迹；无变化不写。
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&find).Error; err != nil {
+			return err
+		}
+		if find.Completeness != oldCompleteness {
+			operatorID, _ := c.MustGet("userId").(uint)
+			var note *string
+			if req.CompletenessNote != nil {
+				if trimmed := strings.TrimSpace(*req.CompletenessNote); trimmed != "" {
+					note = &trimmed
+				}
+			}
+			entry := models.FindCompletenessLog{
+				FindID:     find.ID,
+				FromValue:  oldCompleteness,
+				ToValue:    find.Completeness,
+				OperatorID: operatorID,
+				ChangedAt:  time.Now(),
+				Note:       note,
+			}
+			if err := tx.Create(&entry).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	h.DB.Preload("Unit").Preload("Material").First(&find, find.ID)
 	c.JSON(http.StatusOK, find)
+}
+
+// ListFindCompletenessLogs 返回某件文物的完整度变更轨迹，按时间倒序。
+// 默认返回最近 50 条；limit 参数只能往大调（保底 50），上限 500。
+func (h *Handler) ListFindCompletenessLogs(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var find models.Find
+	if err := h.DB.First(&find, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文物不存在"})
+		return
+	}
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > limit {
+			limit = n
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	logs := make([]models.FindCompletenessLog, 0)
+	if err := h.DB.Preload("Operator").
+		Where("find_id = ?", id).
+		Order("changed_at desc, id desc").
+		Limit(limit).
+		Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, logs)
 }
 
 func (h *Handler) DeleteFind(c *gin.Context) {

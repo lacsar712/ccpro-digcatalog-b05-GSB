@@ -52,6 +52,18 @@ type Material struct {
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
+// FindCompletenessLog 记录 Find.completeness 的每次变更轨迹（仅在实际变化时写入）。
+type FindCompletenessLog struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	FindID     uint      `json:"findId" gorm:"not null;index"`
+	FromValue  string    `json:"fromValue" gorm:"size:32"`
+	ToValue    string    `json:"toValue" gorm:"size:32"`
+	OperatorID uint      `json:"operatorId" gorm:"not null;index"`
+	ChangedAt  time.Time `json:"changedAt" gorm:"not null;index"`
+	Note       *string   `json:"note" gorm:"type:text"` // 可空备注
+	Operator   *User     `json:"operator,omitempty" gorm:"foreignKey:OperatorID"`
+}
+
 type Find struct {
 	ID           uint           `json:"id" gorm:"primaryKey"`
 	UnitID       uint           `json:"unitId" gorm:"not null;index"`
