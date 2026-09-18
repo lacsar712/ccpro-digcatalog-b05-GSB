@@ -61,8 +61,8 @@
       <p v-if="error" class="error">{{ error }}</p>
     </div>
 
-    <div v-if="showModal" class="modal-mask" @click.self="showModal = false">
-      <div class="modal">
+    <div v-if="showDrawer" class="drawer-mask" @click.self="showDrawer = false">
+      <div class="drawer">
         <h3>{{ form.id ? '编辑文物' : '新增文物' }}</h3>
         <div class="form-grid">
           <label>
@@ -111,11 +111,36 @@
             描述
             <textarea v-model="form.description" />
           </label>
+          <label v-if="form.id" class="full">
+            完整度变更备注(可选)
+            <input v-model="form.note" placeholder="仅当完整度发生变化时随轨迹记录" />
+          </label>
         </div>
         <p v-if="formError" class="error">{{ formError }}</p>
         <div class="modal-actions">
-          <button class="btn secondary" @click="showModal = false">取消</button>
+          <span v-if="savedTip" class="saved-tip">{{ savedTip }}</span>
+          <button class="btn secondary" @click="showDrawer = false">关闭</button>
           <button class="btn" @click="save">保存</button>
+        </div>
+
+        <div v-if="form.id" class="timeline-section">
+          <h4>完整度变更轨迹</h4>
+          <p v-if="logsLoading" class="page-sub">加载中…</p>
+          <p v-else-if="!logs.length" class="page-sub">暂无变更记录</p>
+          <ul v-else class="timeline">
+            <li v-for="log in logs" :key="log.id">
+              <div class="timeline-time">{{ formatTime(log.changedAt) }}</div>
+              <div class="timeline-body">
+                <span class="tag">{{ log.fromValue || '空' }}</span>
+                <span class="timeline-arrow">→</span>
+                <span class="tag">{{ log.toValue || '空' }}</span>
+                <span class="timeline-op">
+                  操作人:{{ log.operator?.username || '#' + log.operatorId }}
+                </span>
+              </div>
+              <div v-if="log.note" class="timeline-note">备注:{{ log.note }}</div>
+            </li>
+          </ul>
         </div>
       </div>
     </div>
@@ -134,7 +159,11 @@ const filterUnitId = ref('')
 const filterType = ref('')
 const error = ref('')
 const formError = ref('')
-const showModal = ref(false)
+const showDrawer = ref(false)
+const logs = ref([])
+const logsLoading = ref(false)
+const savedTip = ref('')
+let savedTipTimer = null
 
 const form = reactive({
   id: null,
@@ -145,12 +174,18 @@ const form = reactive({
   completeness: '完整',
   findDate: '',
   description: '',
-  storageLoc: ''
+  storageLoc: '',
+  note: ''
 })
 
 function formatDate(v) {
   if (!v) return '-'
   return String(v).slice(0, 10)
+}
+
+function formatTime(v) {
+  if (!v) return '-'
+  return String(v).replace('T', ' ').slice(0, 19)
 }
 
 async function loadMeta() {
@@ -172,6 +207,26 @@ async function load() {
   }
 }
 
+async function loadLogs(findId) {
+  logsLoading.value = true
+  try {
+    const { data } = await api.get(`/finds/${findId}/completeness-logs`)
+    logs.value = data || []
+  } catch (e) {
+    logs.value = []
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+function flashSaved() {
+  savedTip.value = '已保存'
+  clearTimeout(savedTipTimer)
+  savedTipTimer = setTimeout(() => {
+    savedTip.value = ''
+  }, 2000)
+}
+
 function openCreate() {
   Object.assign(form, {
     id: null,
@@ -182,10 +237,12 @@ function openCreate() {
     completeness: '完整',
     findDate: '',
     description: '',
-    storageLoc: ''
+    storageLoc: '',
+    note: ''
   })
+  logs.value = []
   formError.value = ''
-  showModal.value = true
+  showDrawer.value = true
 }
 
 function openEdit(item) {
@@ -198,10 +255,12 @@ function openEdit(item) {
     completeness: item.completeness || '完整',
     findDate: formatDate(item.findDate) === '-' ? '' : formatDate(item.findDate),
     description: item.description || '',
-    storageLoc: item.storageLoc || ''
+    storageLoc: item.storageLoc || '',
+    note: ''
   })
   formError.value = ''
-  showModal.value = true
+  showDrawer.value = true
+  loadLogs(item.id)
 }
 
 async function save() {
@@ -215,15 +274,21 @@ async function save() {
       completeness: form.completeness,
       findDate: form.findDate || null,
       description: form.description,
-      storageLoc: form.storageLoc
+      storageLoc: form.storageLoc,
+      note: form.note
     }
     if (form.id) {
       await api.put(`/finds/${form.id}`, payload)
+      form.note = ''
+      await load()
+      // 保存成功后立即重新拉取轨迹,新增的变更记录即时出现在时间线上
+      await loadLogs(form.id)
+      flashSaved()
     } else {
       await api.post('/finds', payload)
+      showDrawer.value = false
+      await load()
     }
-    showModal.value = false
-    await load()
   } catch (e) {
     formError.value = e.response?.data?.error || '保存失败'
   }

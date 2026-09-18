@@ -69,3 +69,15 @@ type Find struct {
 	Unit         *Unit          `json:"unit,omitempty" gorm:"foreignKey:UnitID"`
 	Material     *Material      `json:"material,omitempty" gorm:"foreignKey:MaterialID"`
 }
+
+// FindCompletenessLog 记录 Find.Completeness 的每次变更轨迹
+type FindCompletenessLog struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	FindID     uint      `json:"findId" gorm:"not null;index"`
+	FromValue  string    `json:"fromValue" gorm:"size:32"`
+	ToValue    string    `json:"toValue" gorm:"size:32"`
+	OperatorID uint      `json:"operatorId" gorm:"not null;index"`
+	ChangedAt  time.Time `json:"changedAt" gorm:"not null"`
+	Note       *string   `json:"note" gorm:"type:text"` // 可空
+	Operator   *User     `json:"operator,omitempty" gorm:"foreignKey:OperatorID"`
+}

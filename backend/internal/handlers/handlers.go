@@ -298,6 +298,7 @@ type findReq struct {
 	FindDate     *string `json:"findDate"`
 	Description  string  `json:"description"`
 	StorageLoc   string  `json:"storageLoc"`
+	Note         string  `json:"note"` // 完整度变更备注,可空
 }
 
 func parseDate(s *string) *time.Time {
@@ -392,13 +393,57 @@ func (h *Handler) UpdateFind(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数无效"})
 		return
 	}
+	oldCompleteness := find.Completeness
 	h.applyFindReq(&find, &req)
-	if err := h.DB.Save(&find).Error; err != nil {
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&find).Error; err != nil {
+			return err
+		}
+		// 完整度发生变化时写变更日志,无变化不写
+		if find.Completeness != oldCompleteness {
+			entry := models.FindCompletenessLog{
+				FindID:     find.ID,
+				FromValue:  oldCompleteness,
+				ToValue:    find.Completeness,
+				OperatorID: c.GetUint("userId"),
+				ChangedAt:  time.Now(),
+			}
+			if req.Note != "" {
+				note := req.Note
+				entry.Note = &note
+			}
+			if err := tx.Create(&entry).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	h.DB.Preload("Unit").Preload("Material").First(&find, find.ID)
 	c.JSON(http.StatusOK, find)
+}
+
+// ListFindCompletenessLogs 返回某文物完整度变更轨迹,按时间倒序,最多取最近 100 条(不少于 50 条)
+func (h *Handler) ListFindCompletenessLogs(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var find models.Find
+	if err := h.DB.First(&find, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文物不存在"})
+		return
+	}
+	var logs []models.FindCompletenessLog
+	if err := h.DB.Preload("Operator").
+		Where("find_id = ?", id).
+		Order("changed_at desc").Order("id desc").
+		Limit(100).
+		Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, logs)
 }
 
 func (h *Handler) DeleteFind(c *gin.Context) {
